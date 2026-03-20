@@ -26,19 +26,27 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      # diff3.exe 다운로드 (GNU DiffUtils for Windows)
+      # diff3.exe 다운로드 (GnuWin32 DiffUtils from SourceForge)
       - name: Download diff3 (GNU DiffUtils)
         shell: pwsh
         run: |
-          $diffUtilsUrl = "https://github.com/mbitsnbites/gnudiff-win32/releases/download/v3.10/gnudiff-win32-v3.10.zip"
-          $zipPath = "$env:TEMP\gnudiff.zip"
+          # GnuWin32 diffutils (stable, well-known source)
+          $binUrl = "https://sourceforge.net/projects/gnuwin32/files/diffutils/2.8.7-1/diffutils-2.8.7-1-bin.zip/download"
+          $depUrl = "https://sourceforge.net/projects/gnuwin32/files/diffutils/2.8.7-1/diffutils-2.8.7-1-dep.zip/download"
           $extractPath = "$env:TEMP\gnudiff"
-          Invoke-WebRequest -Uri $diffUtilsUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-          # diff3.exe를 출력 디렉토리에 복사할 준비
-          $script:DiffExePath = Get-ChildItem -Path $extractPath -Recurse -Filter "diff3.exe" | Select-Object -First 1 -ExpandProperty FullName
-          $script:DiffExeDir = Split-Path $script:DiffExePath
-          echo "DIFF_TOOLS_DIR=$script:DiffExeDir" >> $env:GITHUB_ENV
+
+          # bin zip 다운로드
+          Invoke-WebRequest -Uri $binUrl -OutFile "$env:TEMP\diffutils-bin.zip" -UserAgent "Mozilla/5.0" -MaximumRedirection 10
+          Expand-Archive -Path "$env:TEMP\diffutils-bin.zip" -DestinationPath $extractPath -Force
+
+          # dependency zip 다운로드 (libiconv, libintl 등)
+          Invoke-WebRequest -Uri $depUrl -OutFile "$env:TEMP\diffutils-dep.zip" -UserAgent "Mozilla/5.0" -MaximumRedirection 10
+          Expand-Archive -Path "$env:TEMP\diffutils-dep.zip" -DestinationPath $extractPath -Force
+
+          # diff3.exe 위치 확인
+          $diffDir = Join-Path $extractPath "bin"
+          Get-ChildItem $diffDir -Filter "*.exe" | ForEach-Object { Write-Host "Found: $($_.Name)" }
+          echo "DIFF_TOOLS_DIR=$diffDir" >> $env:GITHUB_ENV
 
       # Self-contained 빌드 (런타임 포함, 단일 폴더)
       - name: Build (win-x64, self-contained)
