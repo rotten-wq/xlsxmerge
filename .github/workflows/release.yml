@@ -1,0 +1,107 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # v0.7.0, v1.0.0 등 태그 push 시 릴리즈
+  workflow_dispatch:   # 수동 실행도 가능
+
+permissions:
+  contents: write      # GitHub Release 생성에 필요
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # diff3.exe 다운로드 (GNU DiffUtils for Windows)
+      - name: Download diff3 (GNU DiffUtils)
+        shell: pwsh
+        run: |
+          $diffUtilsUrl = "https://github.com/mbitsnbites/gnudiff-win32/releases/download/v3.10/gnudiff-win32-v3.10.zip"
+          $zipPath = "$env:TEMP\gnudiff.zip"
+          $extractPath = "$env:TEMP\gnudiff"
+          Invoke-WebRequest -Uri $diffUtilsUrl -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+          # diff3.exe를 출력 디렉토리에 복사할 준비
+          $script:DiffExePath = Get-ChildItem -Path $extractPath -Recurse -Filter "diff3.exe" | Select-Object -First 1 -ExpandProperty FullName
+          $script:DiffExeDir = Split-Path $script:DiffExePath
+          echo "DIFF_TOOLS_DIR=$script:DiffExeDir" >> $env:GITHUB_ENV
+
+      # Self-contained 빌드 (런타임 포함, 단일 폴더)
+      - name: Build (win-x64, self-contained)
+        run: |
+          dotnet publish src/XlsxMerge/XlsxMerge.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=false `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -o publish/win-x64
+
+      # diff3.exe, diff.exe를 빌드 출력에 복사
+      - name: Bundle diff tools
+        shell: pwsh
+        run: |
+          $diffDir = $env:DIFF_TOOLS_DIR
+          if (Test-Path "$diffDir\diff3.exe") {
+            Copy-Item "$diffDir\diff3.exe" "publish/win-x64/"
+          }
+          if (Test-Path "$diffDir\diff.exe") {
+            Copy-Item "$diffDir\diff.exe" "publish/win-x64/"
+          }
+          # 번들 확인
+          Get-ChildItem publish/win-x64/*.exe | ForEach-Object { Write-Host $_.Name }
+
+      # ZIP 패키징
+      - name: Package release
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_NAME -match '^v') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
+          $zipName = "XlsxMerge-${version}-win-x64.zip"
+          Compress-Archive -Path "publish/win-x64/*" -DestinationPath $zipName
+          echo "RELEASE_ZIP=$zipName" >> $env:GITHUB_ENV
+          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          Write-Host "Created: $zipName"
+
+      # 빌드 아티팩트 업로드 (모든 트리거에서)
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XlsxMerge-${{ env.RELEASE_VERSION }}-win-x64
+          path: publish/win-x64/
+          retention-days: 30
+
+      # GitHub Release 생성 (태그 push 시에만)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: XlsxMerge ${{ env.RELEASE_VERSION }}
+          body: |
+            ## XlsxMerge ${{ env.RELEASE_VERSION }}
+
+            ### 변경 사항
+            - .NET 9.0 기반
+            - ClosedXML 사용 (Excel 설치 불필요)
+            - 향상된 diff 성능
+
+            ### 사용법
+            1. ZIP 파일을 다운로드하여 압축 해제
+            2. `XlsxMerge.exe` 실행
+            3. 또는 명령줄: `XlsxMerge.exe -b=base.xlsx -d=mine.xlsx [-s=theirs.xlsx] [-r=result.xlsx]`
+          files: ${{ env.RELEASE_ZIP }}
+          draft: false
+          prerelease: false
