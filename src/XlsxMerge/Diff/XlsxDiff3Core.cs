@@ -104,7 +104,7 @@ namespace NexonKorea.XlsxMerge
                         newSheetResult.DocsContaining.Add(DocOrigin.Theirs);
 
                     var diff3Sw = Stopwatch.StartNew();
-                    diff3ResultText = LaunchExternalDiff3Process(lines1, lines2, lines3);
+                    diff3ResultText = LaunchExternalDiff3Process(lines1, lines2, lines3, mergeArgs.ComparisonMode);
                     PerfLog.Log($"  Diff3 process '{worksheetName}': {diff3Sw.ElapsedMilliseconds}ms");
                 }
 
@@ -282,8 +282,17 @@ namespace NexonKorea.XlsxMerge
             return null;
         }
 
-        private static string LaunchExternalDiff3Process(List<string>? lines1, List<string>? lines2, List<string>? lines3)
+        private static string LaunchExternalDiff3Process(List<string>? lines1, List<string>? lines2, List<string>? lines3, ComparisonMode mode = ComparisonMode.ThreeWay)
         {
+            // For 2-way mode use built-in diff to avoid external process failures
+            // in environments like Fork git client where diff3.exe returns empty output.
+            if (mode == ComparisonMode.TwoWay)
+            {
+                PerfLog.Log($"  Using built-in 2-way diff (lines1={lines1?.Count}, lines2={lines2?.Count})");
+                return BuiltInTwoWayDiff(lines1, lines2);
+            }
+
+            // 3-way mode: use external diff3.exe
             string tmp1 = Path.GetTempFileName();
             string tmp2 = Path.GetTempFileName();
             string tmp3 = Path.GetTempFileName();
@@ -305,6 +314,7 @@ namespace NexonKorea.XlsxMerge
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                     StandardOutputEncoding = Encoding.UTF8,
                     Arguments = $"\"{tmp1}\" \"{tmp2}\" \"{tmp3}\""
                 };
@@ -314,7 +324,11 @@ namespace NexonKorea.XlsxMerge
                 if (p == null)
                     throw new InvalidOperationException($"Failed to start diff3 process: {diff3Path}");
                 string diff3Result = p.StandardOutput.ReadToEnd();
+                string diff3Stderr = p.StandardError.ReadToEnd();
                 p.WaitForExit();
+                PerfLog.Log($"  diff3 exit={p.ExitCode}, stdout={diff3Result.Length}ch, stderr={diff3Stderr.Length}ch, path={diff3Path}");
+                if (diff3Stderr.Length > 0)
+                    PerfLog.Log($"  diff3 STDERR: {diff3Stderr[..Math.Min(500, diff3Stderr.Length)]}");
                 return diff3Result;
             }
             finally
@@ -323,6 +337,251 @@ namespace NexonKorea.XlsxMerge
                 File.Delete(tmp2);
                 File.Delete(tmp3);
             }
+        }
+
+        /// <summary>
+        /// Built-in 2-way diff using Myers algorithm.
+        /// Compares lines1 (base) vs lines2 (mine) and generates diff3 hunk format with ====1 markers.
+        /// </summary>
+        private static string BuiltInTwoWayDiff(List<string>? lines1, List<string>? lines2)
+        {
+            var a = lines1 ?? new List<string>();
+            var b = lines2 ?? new List<string>();
+
+            var edits = MyersDiff(a, b);
+
+            var sb = new StringBuilder();
+            int i = 0; // index into edits
+            while (i < edits.Count)
+            {
+                // Skip equal edits
+                if (edits[i].op == DiffOp.Equal)
+                {
+                    i++;
+                    continue;
+                }
+
+                // Collect a contiguous block of non-equal edits
+                int blockStart = i;
+                while (i < edits.Count && edits[i].op != DiffOp.Equal)
+                    i++;
+                int blockEnd = i; // exclusive
+
+                // Determine ranges in file1 (base/lines1) and file2 (mine/lines2)
+                int file1Start = -1, file1End = -1;
+                int file2Start = -1, file2End = -1;
+
+                foreach (var e in edits.Skip(blockStart).Take(blockEnd - blockStart))
+                {
+                    if (e.op == DiffOp.Delete || e.op == DiffOp.Equal)
+                    {
+                        if (file1Start < 0) file1Start = e.aLine;
+                        file1End = e.aLine;
+                    }
+                    if (e.op == DiffOp.Insert || e.op == DiffOp.Equal)
+                    {
+                        if (file2Start < 0) file2Start = e.bLine;
+                        file2End = e.bLine;
+                    }
+                }
+
+                // Build diff3 hunk: ====1 means file1 (base) differs
+                sb.AppendLine("====1");
+
+                // File 1 range (1-based)
+                if (file1Start < 0)
+                {
+                    // Pure insertion: find position in file1 just before this block
+                    // The anchor is the aLine of the edit before blockStart (or 0 if none)
+                    int anchor1 = blockStart > 0 ? edits[blockStart - 1].aLine : 0;
+                    sb.AppendLine($"1:{anchor1}a");
+                }
+                else
+                {
+                    int r1s = file1Start + 1; // convert to 1-based
+                    int r1e = file1End + 1;
+                    sb.AppendLine(r1s == r1e ? $"1:{r1s}c" : $"1:{r1s},{r1e}c");
+                }
+
+                // File 2 range (1-based)
+                if (file2Start < 0)
+                {
+                    int anchor2 = blockStart > 0 ? edits[blockStart - 1].bLine : 0;
+                    sb.AppendLine($"2:{anchor2}a");
+                }
+                else
+                {
+                    int r2s = file2Start + 1;
+                    int r2e = file2End + 1;
+                    sb.AppendLine(r2s == r2e ? $"2:{r2s}c" : $"2:{r2s},{r2e}c");
+                }
+
+                // File 3 = same as file 2 for 2-way mode
+                if (file2Start < 0)
+                {
+                    int anchor3 = blockStart > 0 ? edits[blockStart - 1].bLine : 0;
+                    sb.AppendLine($"3:{anchor3}a");
+                }
+                else
+                {
+                    int r3s = file2Start + 1;
+                    int r3e = file2End + 1;
+                    sb.AppendLine(r3s == r3e ? $"3:{r3s}c" : $"3:{r3s},{r3e}c");
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        private enum DiffOp { Equal, Insert, Delete }
+
+        private readonly struct DiffEdit
+        {
+            public readonly DiffOp op;
+            public readonly int aLine; // 0-based index in 'a' (only valid for Delete/Equal)
+            public readonly int bLine; // 0-based index in 'b' (only valid for Insert/Equal)
+            public DiffEdit(DiffOp op, int aLine, int bLine) { this.op = op; this.aLine = aLine; this.bLine = bLine; }
+        }
+
+        /// <summary>
+        /// Myers diff algorithm. Returns a list of edit operations describing
+        /// how to transform sequence 'a' into sequence 'b'.
+        /// Based on the standard Myers 1986 algorithm with forward pass + backtrack.
+        /// </summary>
+        private static List<DiffEdit> MyersDiff(List<string> a, List<string> b)
+        {
+            int n = a.Count, m = b.Count;
+
+            if (n == 0 && m == 0)
+                return new List<DiffEdit>();
+
+            if (n == 0)
+            {
+                var inserts = new List<DiffEdit>(m);
+                for (int j = 0; j < m; j++)
+                    inserts.Add(new DiffEdit(DiffOp.Insert, 0, j));
+                return inserts;
+            }
+
+            if (m == 0)
+            {
+                var deletes = new List<DiffEdit>(n);
+                for (int ii = 0; ii < n; ii++)
+                    deletes.Add(new DiffEdit(DiffOp.Delete, ii, 0));
+                return deletes;
+            }
+
+            int max = n + m;
+            int offset = max; // offset so k can be negative index
+            var v = new int[2 * max + 2];
+            v[1 + offset] = 0;
+
+            // trace[d] = copy of v after processing step d
+            var trace = new List<int[]>(max + 1);
+
+            for (int d = 0; d <= max; d++)
+            {
+                for (int k = -d; k <= d; k += 2)
+                {
+                    int kOff = k + offset;
+                    int x;
+                    if (k == -d || (k != d && v[kOff - 1] < v[kOff + 1]))
+                        x = v[kOff + 1];       // move down (insert b[y])
+                    else
+                        x = v[kOff - 1] + 1;   // move right (delete a[x])
+
+                    int y = x - k;
+                    // Follow diagonal (equal lines)
+                    while (x < n && y < m && a[x] == b[y])
+                    {
+                        x++;
+                        y++;
+                    }
+                    v[kOff] = x;
+                    if (x >= n && y >= m)
+                    {
+                        // Save this step's frontier then backtrack
+                        var snap = new int[2 * max + 2];
+                        Array.Copy(v, snap, v.Length);
+                        trace.Add(snap);
+
+                        return Backtrack(a, b, trace, d, offset);
+                    }
+                }
+
+                // Save frontier after step d
+                var snapshot = new int[2 * max + 2];
+                Array.Copy(v, snapshot, v.Length);
+                trace.Add(snapshot);
+            }
+
+            // Should never reach here for valid inputs
+            return new List<DiffEdit>();
+        }
+
+        private static List<DiffEdit> Backtrack(List<string> a, List<string> b, List<int[]> trace, int dFinal, int offset)
+        {
+            var edits = new List<DiffEdit>();
+            int cx = a.Count, cy = b.Count;
+
+            for (int d = dFinal; d > 0; d--)
+            {
+                var vPrev = trace[d - 1]; // frontier after step d-1
+                int k = cx - cy;
+                int kOff = k + offset;
+
+                // Determine which diagonal we came from in step d-1
+                int prevK;
+                if (k == -d || (k != d && vPrev[kOff - 1] < vPrev[kOff + 1]))
+                    prevK = k + 1; // came from k+1: moved down (insert b[y])
+                else
+                    prevK = k - 1; // came from k-1: moved right (delete a[x])
+
+                int prevX = vPrev[prevK + offset];
+                int prevY = prevX - prevK;
+
+                // After the single edit, we're at (endX, endY), then the snake brought us to (cx, cy).
+                // endX = prevX + (prevK == k-1 ? 1 : 0)
+                // endY = prevY + (prevK == k+1 ? 1 : 0)
+                int endX = prevX + (prevK == k - 1 ? 1 : 0);
+                int endY = prevY + (prevK == k + 1 ? 1 : 0);
+
+                // Emit equals for the snake (cx,cy) -> (endX,endY), in reverse
+                while (cx > endX && cy > endY)
+                {
+                    cx--;
+                    cy--;
+                    edits.Add(new DiffEdit(DiffOp.Equal, cx, cy));
+                }
+
+                // Emit the single edit
+                if (prevK == k - 1)
+                {
+                    // Moved right: deleted a[prevX] (0-based)
+                    cx--;
+                    edits.Add(new DiffEdit(DiffOp.Delete, cx, cy));
+                }
+                else
+                {
+                    // Moved down: inserted b[prevY] (0-based)
+                    cy--;
+                    edits.Add(new DiffEdit(DiffOp.Insert, cx, cy));
+                }
+
+                cx = prevX;
+                cy = prevY;
+            }
+
+            // Remaining equal prefix at d=0 diagonal
+            while (cx > 0 && cy > 0)
+            {
+                cx--;
+                cy--;
+                edits.Add(new DiffEdit(DiffOp.Equal, cx, cy));
+            }
+
+            edits.Reverse();
+            return edits;
         }
         /// <summary>
         /// Fork passes a working-dir copy as $REMOTE for binary files, making Base == Mine.
