@@ -54,7 +54,7 @@ namespace NexonKorea.XlsxMerge
             {
                 ParsedWorkbookMap[DocOrigin.Base],
                 ParsedWorkbookMap[DocOrigin.Mine],
-                mergeArgs.ComparisonMode == ComparisonMode.ThreeWay ? ParsedWorkbookMap[DocOrigin.Theirs] : ParsedWorkbookMap[DocOrigin.Base]
+                mergeArgs.ComparisonMode == ComparisonMode.ThreeWay ? ParsedWorkbookMap[DocOrigin.Theirs] : ParsedWorkbookMap[DocOrigin.Mine]
             };
 
             // 비교 대상 워크시트 목록을 추출
@@ -87,7 +87,8 @@ namespace NexonKorea.XlsxMerge
 
                     if (lines1 != null) newSheetResult.DocsContaining.Add(DocOrigin.Base);
                     if (lines2 != null) newSheetResult.DocsContaining.Add(DocOrigin.Mine);
-                    if (lines3 != null) newSheetResult.DocsContaining.Add(DocOrigin.Theirs);
+                    if (lines3 != null && mergeArgs.ComparisonMode == ComparisonMode.ThreeWay)
+                        newSheetResult.DocsContaining.Add(DocOrigin.Theirs);
 
                     var diff3Sw = Stopwatch.StartNew();
                     diff3ResultText = LaunchExternalDiff3Process(lines1, lines2, lines3);

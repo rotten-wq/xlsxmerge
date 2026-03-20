@@ -70,7 +70,8 @@ namespace NexonKorea.XlsxMerge
 					{
 						if (docsContaining.Contains(DocOrigin.Mine))
 						{
-							if (SheetDiffResult.HunkList.Find(r => r.hunkStatus == Diff3HunkStatus.MineDiffers) == null)
+							if (SheetDiffResult.HunkList.Find(r => r.hunkStatus == Diff3HunkStatus.MineDiffers
+								|| r.hunkStatus == Diff3HunkStatus.BaseDiffers) == null)
 								candidateList.Add(WorksheetMergeMode.Unchanged); // a1
 							else
 								candidateList.Add(WorksheetMergeMode.Merge); // a2
