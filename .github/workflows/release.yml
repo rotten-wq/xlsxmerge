@@ -68,8 +68,12 @@ jobs:
           if (Test-Path "$diffDir\diff.exe") {
             Copy-Item "$diffDir\diff.exe" "publish/win-x64/"
           }
+          # Fork 등록 스크립트 복사
+          Copy-Item "scripts/Register-ForkDiffTool.ps1" "publish/win-x64/"
           # 번들 확인
           Get-ChildItem publish/win-x64/*.exe | ForEach-Object { Write-Host $_.Name }
+          Write-Host "Scripts:"
+          Get-ChildItem publish/win-x64/*.ps1 | ForEach-Object { Write-Host "  $($_.Name)" }
 
       # ZIP 패키징
       - name: Package release
