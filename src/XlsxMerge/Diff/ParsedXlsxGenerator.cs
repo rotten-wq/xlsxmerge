@@ -12,7 +12,9 @@ namespace NexonKorea.XlsxMerge
             FakeBackgroundWorker.OnUpdateProgress("xlsx 파일 비교 [3단계 중 2단계]", "문서를 읽고 있습니다.", Path.GetFileName(xlsxFilePath), xlsxFilePath);
 
             var sw = Stopwatch.StartNew();
-            using var workbook = new XLWorkbook(xlsxFilePath);
+            // Open as read-only stream to avoid locking conflicts with other processes (e.g. Excel, Fork)
+            using var fileStream = new FileStream(xlsxFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var workbook = new XLWorkbook(fileStream);
             var loadTime = sw.ElapsedMilliseconds;
             PerfLog.Log($"  XLWorkbook load '{Path.GetFileName(xlsxFilePath)}': {loadTime}ms");
 

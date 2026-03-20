@@ -83,7 +83,7 @@ namespace NexonKorea.XlsxMerge
                     var lines1 = GetWorksheetLines(xlsxList[0], worksheetName);
                     var lines2 = GetWorksheetLines(xlsxList[1], worksheetName);
                     var lines3 = GetWorksheetLines(xlsxList[2], worksheetName);
-                    PerfLog.Log($"  GetWorksheetLines '{worksheetName}': {linesSw.ElapsedMilliseconds}ms");
+                    PerfLog.Log($"  GetWorksheetLines '{worksheetName}': {linesSw.ElapsedMilliseconds}ms (lines1={lines1?.Count}, lines2={lines2?.Count}, lines3={lines3?.Count})");
 
                     if (lines1 != null) newSheetResult.DocsContaining.Add(DocOrigin.Base);
                     if (lines2 != null) newSheetResult.DocsContaining.Add(DocOrigin.Mine);
@@ -96,6 +96,11 @@ namespace NexonKorea.XlsxMerge
                 }
 
                 newSheetResult.HunkList = ParseDiff3Result(diff3ResultText);
+                PerfLog.Log($"  Diff3 output '{worksheetName}' ({diff3ResultText.Length} chars): hunks={newSheetResult.HunkList.Count}");
+                if (newSheetResult.HunkList.Count > 0)
+                    PerfLog.Log($"    First hunk status: {newSheetResult.HunkList[0].hunkStatus}");
+                else if (diff3ResultText.Length > 0)
+                    PerfLog.Log($"    Raw diff3 (first 200 chars): {diff3ResultText[..Math.Min(200, diff3ResultText.Length)]}");
                 results.Add((idx, newSheetResult));
                 PerfLog.Log($"  Sheet diff total '{worksheetName}': {sheetSw.ElapsedMilliseconds}ms");
             });

@@ -48,10 +48,27 @@
 
             var args = Environment.GetCommandLineArgs();
 
+            // Log received arguments for diagnostics
+            try
+            {
+                string argLog = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Args ({args.Length}): {string.Join(" | ", args)}\n";
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "xlsxmerge_args.log"), argLog);
+            }
+            catch { }
+
             MergeArgumentInfo? argumentInfo = null;
             if (args.Length > 1)
             {
                 argumentInfo = new MergeArgumentInfo(args);
+
+                // Log parsed paths
+                try
+                {
+                    string parseLog = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Parsed: Base={argumentInfo.BasePath} | Mine={argumentInfo.MinePath} | Mode={argumentInfo.ComparisonMode}\n";
+                    File.AppendAllText(Path.Combine(Path.GetTempPath(), "xlsxmerge_args.log"), parseLog);
+                }
+                catch { }
+
                 if (argumentInfo.ComparisonMode == ComparisonMode.Unknown)
                 {
                     argumentInfo = null;
