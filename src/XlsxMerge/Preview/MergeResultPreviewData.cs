@@ -34,6 +34,7 @@ namespace NexonKorea.XlsxMerge
 			int lastRowBase = 0; // result 안에 이미 들어간 base 의 마지막 줄
 
 
+			var emptyRowRange = new RowRange();
 			for (var hunkIdx = 0; hunkIdx < sheetResult.HunkList.Count; hunkIdx++)
 			{
 				var eachHunkInfo = sheetResult.HunkList[hunkIdx];
@@ -50,9 +51,9 @@ namespace NexonKorea.XlsxMerge
 				}
 
 
-				var rowRangeBase = eachHunkInfo.rowRangeMap[DocOrigin.Base];
-				var rowRangeMine = eachHunkInfo.rowRangeMap[DocOrigin.Mine];
-				var rowRangeTheirs = eachHunkInfo.rowRangeMap[DocOrigin.Theirs];
+				var rowRangeBase = eachHunkInfo.rowRangeMap.GetValueOrDefault(DocOrigin.Base, emptyRowRange);
+				var rowRangeMine = eachHunkInfo.rowRangeMap.GetValueOrDefault(DocOrigin.Mine, emptyRowRange);
+				var rowRangeTheirs = eachHunkInfo.rowRangeMap.GetValueOrDefault(DocOrigin.Theirs, emptyRowRange);
 
 				if (hideEqualLines == false)
 					for (int i = lastRowBase + 1; i < rowRangeBase.RowNumber; i++)

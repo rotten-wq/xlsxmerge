@@ -27,7 +27,7 @@ namespace NexonKorea.XlsxMerge
 
 			public CellContents Cell(int rowNumber, int colNumber)
 			{
-				if (rowNumber <= Cells.Count && colNumber <= Cells[rowNumber - 1].Count)
+				if (rowNumber >= 1 && colNumber >= 1 && rowNumber <= Cells.Count && colNumber <= Cells[rowNumber - 1].Count)
 					return Cells[rowNumber - 1][colNumber - 1];
 				return new CellContents();
 			}

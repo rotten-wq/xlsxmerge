@@ -175,6 +175,69 @@ namespace NexonKorea.XlsxMerge
             return hunkInfoList;
         }
 
+        private static string? FindDiff3Executable()
+        {
+            // 1. Same folder as XlsxMerge.exe
+            string? exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly()?.Location);
+            if (!string.IsNullOrEmpty(exeDir))
+            {
+                string candidate = Path.Combine(exeDir, "diff3.exe");
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            // 2. Current working directory
+            string cwdCandidate = Path.GetFullPath("diff3.exe");
+            if (File.Exists(cwdCandidate))
+                return cwdCandidate;
+
+            // 3. Git for Windows bundled diff3
+            try
+            {
+                var gitPsi = new ProcessStartInfo("where.exe", "git")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true
+                };
+                using var gitProc = Process.Start(gitPsi);
+                if (gitProc != null)
+                {
+                    string gitPath = gitProc.StandardOutput.ReadLine() ?? "";
+                    gitProc.WaitForExit();
+                    if (!string.IsNullOrEmpty(gitPath))
+                    {
+                        // git.exe is typically at <GitRoot>/cmd/git.exe or <GitRoot>/bin/git.exe
+                        string? gitRoot = Path.GetDirectoryName(Path.GetDirectoryName(gitPath));
+                        if (!string.IsNullOrEmpty(gitRoot))
+                        {
+                            string gitDiff3 = Path.Combine(gitRoot, "usr", "bin", "diff3.exe");
+                            if (File.Exists(gitDiff3))
+                                return gitDiff3;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore errors in git discovery
+            }
+
+            // 4. Common known paths
+            string[] knownPaths = new[]
+            {
+                @"C:\Program Files\Git\usr\bin\diff3.exe",
+                @"C:\Program Files (x86)\Git\usr\bin\diff3.exe"
+            };
+            foreach (string knownPath in knownPaths)
+            {
+                if (File.Exists(knownPath))
+                    return knownPath;
+            }
+
+            return null;
+        }
+
         private static string LaunchExternalDiff3Process(List<string>? lines1, List<string>? lines2, List<string>? lines3)
         {
             string tmp1 = Path.GetTempFileName();
@@ -187,9 +250,14 @@ namespace NexonKorea.XlsxMerge
                 if (lines2 != null) File.WriteAllLines(tmp2, lines2);
                 if (lines3 != null) File.WriteAllLines(tmp3, lines3);
 
+                string? diff3Path = FindDiff3Executable();
+                if (diff3Path == null)
+                    throw new FileNotFoundException(
+                        "diff3.exe not found. Please install Git for Windows or place diff3.exe next to XlsxMerge.exe.");
+
                 var psi = new ProcessStartInfo()
                 {
-                    FileName = Path.GetFullPath(@".\diff3.exe"),
+                    FileName = diff3Path,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
@@ -198,7 +266,9 @@ namespace NexonKorea.XlsxMerge
                 };
                 psi.WorkingDirectory = Path.GetDirectoryName(psi.FileName);
 
-                using var p = Process.Start(psi)!;
+                using var p = Process.Start(psi);
+                if (p == null)
+                    throw new InvalidOperationException($"Failed to start diff3 process: {diff3Path}");
                 string diff3Result = p.StandardOutput.ReadToEnd();
                 p.WaitForExit();
                 return diff3Result;

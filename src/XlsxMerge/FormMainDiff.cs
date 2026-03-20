@@ -428,6 +428,11 @@ namespace NexonKorea.XlsxMerge
 
 			var worksheetBase = _xlsxMergeDecision.DiffResult.GetParsedWorksheetData(sheetResult.WorksheetName)[DocOrigin.Base];
 			var previewData = MergeResultPreviewData.GeneratePreviewData(getCurrentSheetDecision(), worksheetBase == null ? 0 : worksheetBase.GetRowCount(), checkBoxHideRemovedLines.Checked, checkBoxHideEqualLines.Checked);
+			if (previewData == null)
+			{
+				_dataGridViewCellUpdatingInProgress = false;
+				return;
+			}
 			previewDataCache[sheetResult.WorksheetName] = previewData;
 			MergeResultPreviewer.RefreshDataGridViewContents(_xlsxMergeDecision, sheetDecision, dataGridView1, previewData);
 			UpdateDataGridViewColumnName();
@@ -459,7 +464,11 @@ namespace NexonKorea.XlsxMerge
 
 			dataGridView1.ClearSelection();
 
-			var previewData = previewDataCache[sheetDecision.WorksheetName];
+			if (!previewDataCache.TryGetValue(sheetDecision.WorksheetName, out var previewData) || previewData == null)
+			{
+				_dataGridViewCellUpdatingInProgress = false;
+				return;
+			}
 			if (_focusedHunkIdx != -1 && previewData.HunkStartsPosList.Count > 0)
 			{
 				for (int rowIndex = previewData.HunkStartsPosList[_focusedHunkIdx];
@@ -522,6 +531,8 @@ namespace NexonKorea.XlsxMerge
 				return;
 
 			var startPosList = previewDataCache[sheetDecision.WorksheetName].HunkStartsPosList;
+			if (startPosList.Count == 0)
+				return;
 
 			var newHunkIdx = (_focusedHunkIdx + direction + startPosList.Count) % startPosList.Count;
 			_focusedHunkIdx = newHunkIdx;
@@ -536,7 +547,9 @@ namespace NexonKorea.XlsxMerge
 				return;
 
 			var sheetResult = sheetDecision.SheetDiffResult;
-			var hunkIdx = previewDataCache[sheetResult.WorksheetName].GetHunkIdxByRowNumber(e.RowIndex);
+			if (!previewDataCache.TryGetValue(sheetResult.WorksheetName, out var cellMousePreviewData) || cellMousePreviewData == null)
+				return;
+			var hunkIdx = cellMousePreviewData.GetHunkIdxByRowNumber(e.RowIndex);
 			if (hunkIdx >= 0)
 			{
 				ChangeFocusedHunk(hunkIdx);
