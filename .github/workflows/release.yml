@@ -44,7 +44,17 @@ jobs:
           Write-Host "Found diff3.exe in: $diffDir"
           echo "DIFF_TOOLS_DIR=$diffDir" >> $env:GITHUB_ENV
 
-      # Self-contained 빌드 (런타임 포함)
+      # 버전 변수 설정 (빌드 전에 수행)
+      - name: Set version
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_NAME -match '^v(.+)$') { $Matches[1] } else { "0.0.0-dev.$($env:GITHUB_SHA.Substring(0,7))" }
+          $tagName = if ($env:GITHUB_REF_NAME -match '^v') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
+          echo "APP_VERSION=$version" >> $env:GITHUB_ENV
+          echo "TAG_NAME=$tagName" >> $env:GITHUB_ENV
+          Write-Host "Version: $version / Tag: $tagName"
+
+      # Self-contained 빌드 (런타임 포함, 태그 버전 주입)
       - name: Build (win-x64, self-contained)
         run: |
           dotnet publish src/XlsxMerge/XlsxMerge.csproj `
@@ -53,6 +63,9 @@ jobs:
             --self-contained true `
             -p:PublishSingleFile=false `
             -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:Version=${{ env.APP_VERSION }} `
+            -p:AssemblyVersion=${{ env.APP_VERSION }}.0 `
+            -p:FileVersion=${{ env.APP_VERSION }}.0 `
             -o publish/win-x64
 
       # diff3/diff.exe + 스크립트 번들링
@@ -65,16 +78,6 @@ jobs:
           Copy-Item "scripts/Register-ForkDiffTool.ps1" "publish/win-x64/"
           Write-Host "=== Bundle contents ==="
           Get-ChildItem publish/win-x64/ -Name | ForEach-Object { Write-Host "  $_" }
-
-      # 버전 변수 설정
-      - name: Set version
-        shell: pwsh
-        run: |
-          $version = if ($env:GITHUB_REF_NAME -match '^v(.+)$') { $Matches[1] } else { "0.0.0-dev.$($env:GITHUB_SHA.Substring(0,7))" }
-          $tagName = if ($env:GITHUB_REF_NAME -match '^v') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
-          echo "APP_VERSION=$version" >> $env:GITHUB_ENV
-          echo "TAG_NAME=$tagName" >> $env:GITHUB_ENV
-          Write-Host "Version: $version / Tag: $tagName"
 
       # ── ZIP 패키징 ──
       - name: Package ZIP
