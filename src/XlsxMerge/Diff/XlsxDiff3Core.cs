@@ -30,13 +30,20 @@ namespace NexonKorea.XlsxMerge
             var totalSw = Stopwatch.StartNew();
             MergeArgs = mergeArgs;
 
+            // Workaround: Fork passes working-dir copy as $REMOTE for binary files,
+            // so Base and Mine end up identical. Detect this and extract HEAD from git.
+            string? gitBaseTemp = null;
+            if (mergeArgs.ComparisonMode == ComparisonMode.TwoWay)
+                gitBaseTemp = TryResolveGitBase(mergeArgs);
+
             // Parallel file loading - each XLWorkbook instance is independent
             FakeBackgroundWorker.OnUpdateProgress("xlsx 파일 비교 [3단계 중 1단계]", "문서를 읽고 있습니다...");
             var loadSw = Stopwatch.StartNew();
 
+            string basePath = gitBaseTemp ?? mergeArgs.BasePath!;
             var loadTasks = new List<Task<(DocOrigin origin, ParsedXlsx parsed)>>
             {
-                Task.Run(() => (DocOrigin.Base, new ParsedXlsxGenerator().ParseXlsx(mergeArgs.BasePath!))),
+                Task.Run(() => (DocOrigin.Base, new ParsedXlsxGenerator().ParseXlsx(basePath))),
                 Task.Run(() => (DocOrigin.Mine, new ParsedXlsxGenerator().ParseXlsx(mergeArgs.MinePath!))),
             };
             if (mergeArgs.ComparisonMode == ComparisonMode.ThreeWay)
@@ -45,6 +52,12 @@ namespace NexonKorea.XlsxMerge
             Task.WhenAll(loadTasks).GetAwaiter().GetResult();
             foreach (var t in loadTasks)
                 ParsedWorkbookMap[t.Result.origin] = t.Result.parsed;
+
+            // Clean up temp file
+            if (gitBaseTemp != null)
+            {
+                try { File.Delete(gitBaseTemp); } catch { }
+            }
 
             PerfLog.Log($"Total file loading (parallel): {loadSw.ElapsedMilliseconds}ms");
 
@@ -310,6 +323,113 @@ namespace NexonKorea.XlsxMerge
                 File.Delete(tmp2);
                 File.Delete(tmp3);
             }
+        }
+        /// <summary>
+        /// Fork passes a working-dir copy as $REMOTE for binary files, making Base == Mine.
+        /// Detect this by comparing file hashes. If identical, extract HEAD version from git.
+        /// Returns a temp file path with the git HEAD version, or null if not needed.
+        /// </summary>
+        private static string? TryResolveGitBase(MergeArgumentInfo mergeArgs)
+        {
+            try
+            {
+                string basePath = mergeArgs.BasePath!;
+                string minePath = mergeArgs.MinePath!;
+
+                // Quick check: if files differ in size, they're genuinely different
+                var baseInfo = new FileInfo(basePath);
+                var mineInfo = new FileInfo(minePath);
+                if (baseInfo.Length != mineInfo.Length)
+                    return null;
+
+                // Compare file content via hash
+                using var md5 = System.Security.Cryptography.MD5.Create();
+                byte[] baseHash, mineHash;
+                using (var bs = File.OpenRead(basePath)) baseHash = md5.ComputeHash(bs);
+                using (var ms = File.OpenRead(minePath)) mineHash = md5.ComputeHash(ms);
+                if (!baseHash.SequenceEqual(mineHash))
+                    return null;
+
+                PerfLog.Log("Base and Mine are identical — attempting git HEAD extraction");
+
+                // Find git repo for Mine path
+                string? repoFile = FindGitRepoFile(minePath);
+                if (repoFile == null)
+                {
+                    PerfLog.Log("  Not in a git repository");
+                    return null;
+                }
+
+                // Get relative path within repo
+                string repoRoot = Path.GetDirectoryName(repoFile)!;
+                string relativePath = Path.GetRelativePath(repoRoot, mineInfo.FullName).Replace('\\', '/');
+
+                // Extract HEAD version via git show
+                string tempFile = Path.Combine(Path.GetTempPath(), $"xlsxmerge_gitbase_{Path.GetFileName(minePath)}");
+                var psi = new ProcessStartInfo("git", $"show HEAD:\"{relativePath}\"")
+                {
+                    WorkingDirectory = repoRoot,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = null // binary output
+                };
+
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                    return null;
+
+                // Write binary stdout to temp file
+                using (var outStream = File.Create(tempFile))
+                {
+                    proc.StandardOutput.BaseStream.CopyTo(outStream);
+                }
+                proc.WaitForExit();
+
+                if (proc.ExitCode != 0)
+                {
+                    PerfLog.Log($"  git show failed (exit {proc.ExitCode}): {proc.StandardError.ReadToEnd()}");
+                    try { File.Delete(tempFile); } catch { }
+                    return null;
+                }
+
+                // Verify the extracted file differs from working dir
+                var extractedInfo = new FileInfo(tempFile);
+                if (extractedInfo.Length == mineInfo.Length)
+                {
+                    using var emd5 = System.Security.Cryptography.MD5.Create();
+                    byte[] extractedHash;
+                    using (var es = File.OpenRead(tempFile)) extractedHash = emd5.ComputeHash(es);
+                    if (extractedHash.SequenceEqual(mineHash))
+                    {
+                        PerfLog.Log("  HEAD version is same as working dir — no changes to show");
+                        try { File.Delete(tempFile); } catch { }
+                        return null;
+                    }
+                }
+
+                PerfLog.Log($"  Using git HEAD as base: {extractedInfo.Length} bytes (working: {mineInfo.Length} bytes)");
+                return tempFile;
+            }
+            catch (Exception ex)
+            {
+                PerfLog.Log($"  TryResolveGitBase failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string? FindGitRepoFile(string filePath)
+        {
+            string? dir = Path.GetDirectoryName(Path.GetFullPath(filePath));
+            while (dir != null)
+            {
+                string gitDir = Path.Combine(dir, ".git");
+                if (Directory.Exists(gitDir) || File.Exists(gitDir))
+                    return gitDir;
+                dir = Path.GetDirectoryName(dir);
+            }
+            return null;
         }
     }
 }
