@@ -30,7 +30,6 @@ jobs:
       - name: Locate diff3 from Git installation
         shell: pwsh
         run: |
-          # Git for Windows에 내장된 diff3.exe 사용
           $gitDir = (Get-Command git).Source | Split-Path | Split-Path
           $candidates = @(
             "$gitDir\usr\bin",
@@ -43,10 +42,9 @@ jobs:
             exit 1
           }
           Write-Host "Found diff3.exe in: $diffDir"
-          Get-ChildItem "$diffDir\diff*.exe" | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "DIFF_TOOLS_DIR=$diffDir" >> $env:GITHUB_ENV
 
-      # Self-contained 빌드 (런타임 포함, 단일 폴더)
+      # Self-contained 빌드 (런타임 포함)
       - name: Build (win-x64, self-contained)
         run: |
           dotnet publish src/XlsxMerge/XlsxMerge.csproj `
@@ -57,41 +55,67 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -o publish/win-x64
 
-      # diff3.exe, diff.exe를 빌드 출력에 복사
-      - name: Bundle diff tools
+      # diff3/diff.exe + 스크립트 번들링
+      - name: Bundle extra files
         shell: pwsh
         run: |
           $diffDir = $env:DIFF_TOOLS_DIR
-          if (Test-Path "$diffDir\diff3.exe") {
-            Copy-Item "$diffDir\diff3.exe" "publish/win-x64/"
-          }
-          if (Test-Path "$diffDir\diff.exe") {
-            Copy-Item "$diffDir\diff.exe" "publish/win-x64/"
-          }
-          # Fork 등록 스크립트 복사
+          if (Test-Path "$diffDir\diff3.exe") { Copy-Item "$diffDir\diff3.exe" "publish/win-x64/" }
+          if (Test-Path "$diffDir\diff.exe")  { Copy-Item "$diffDir\diff.exe"  "publish/win-x64/" }
           Copy-Item "scripts/Register-ForkDiffTool.ps1" "publish/win-x64/"
-          # 번들 확인
-          Get-ChildItem publish/win-x64/*.exe | ForEach-Object { Write-Host $_.Name }
-          Write-Host "Scripts:"
-          Get-ChildItem publish/win-x64/*.ps1 | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "=== Bundle contents ==="
+          Get-ChildItem publish/win-x64/ -Name | ForEach-Object { Write-Host "  $_" }
 
-      # ZIP 패키징
-      - name: Package release
+      # 버전 변수 설정
+      - name: Set version
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_NAME -match '^v') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
-          $zipName = "XlsxMerge-${version}-win-x64.zip"
+          $version = if ($env:GITHUB_REF_NAME -match '^v(.+)$') { $Matches[1] } else { "0.0.0-dev.$($env:GITHUB_SHA.Substring(0,7))" }
+          $tagName = if ($env:GITHUB_REF_NAME -match '^v') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
+          echo "APP_VERSION=$version" >> $env:GITHUB_ENV
+          echo "TAG_NAME=$tagName" >> $env:GITHUB_ENV
+          Write-Host "Version: $version / Tag: $tagName"
+
+      # ── ZIP 패키징 ──
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          $zipName = "XlsxMerge-${{ env.TAG_NAME }}-win-x64.zip"
           Compress-Archive -Path "publish/win-x64/*" -DestinationPath $zipName
           echo "RELEASE_ZIP=$zipName" >> $env:GITHUB_ENV
-          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
           Write-Host "Created: $zipName"
 
-      # 빌드 아티팩트 업로드 (모든 트리거에서)
-      - name: Upload build artifact
+      # ── Inno Setup 설치 프로그램 빌드 ──
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # Inno Setup 6은 windows-latest에 사전 설치됨
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            # 없으면 Chocolatey로 설치
+            choco install innosetup -y --no-progress
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          Write-Host "Using ISCC: $iscc"
+
+          # 절대 경로 변환
+          $publishDir = (Resolve-Path "publish/win-x64").Path
+
+          & $iscc /DVERSION=${{ env.APP_VERSION }} /DPUBLISH_DIR="$publishDir" "installer/XlsxMerge.iss"
+
+          $setupExe = Get-ChildItem "installer/output/XlsxMerge-*-setup.exe" | Select-Object -First 1
+          echo "RELEASE_SETUP=$($setupExe.FullName)" >> $env:GITHUB_ENV
+          echo "RELEASE_SETUP_NAME=$($setupExe.Name)" >> $env:GITHUB_ENV
+          Write-Host "Created: $($setupExe.Name)"
+
+      # 빌드 아티팩트 업로드
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: XlsxMerge-${{ env.RELEASE_VERSION }}-win-x64
-          path: publish/win-x64/
+          name: XlsxMerge-${{ env.TAG_NAME }}-win-x64
+          path: |
+            ${{ env.RELEASE_ZIP }}
+            ${{ env.RELEASE_SETUP }}
           retention-days: 30
 
       # GitHub Release 생성 (태그 push 시에만)
@@ -99,19 +123,33 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: XlsxMerge ${{ env.RELEASE_VERSION }}
+          name: XlsxMerge ${{ env.TAG_NAME }}
           body: |
-            ## XlsxMerge ${{ env.RELEASE_VERSION }}
+            ## XlsxMerge ${{ env.TAG_NAME }}
 
-            ### 변경 사항
-            - .NET 9.0 기반
-            - ClosedXML 사용 (Excel 설치 불필요)
-            - 향상된 diff 성능
+            ### Downloads
+            | 파일 | 설명 |
+            |------|------|
+            | `${{ env.RELEASE_SETUP_NAME }}` | **Windows 설치 프로그램** (권장) - Fork 자동 등록 포함 |
+            | `XlsxMerge-${{ env.TAG_NAME }}-win-x64.zip` | 포터블 ZIP (압축 해제 후 바로 사용) |
 
-            ### 사용법
-            1. ZIP 파일을 다운로드하여 압축 해제
-            2. `XlsxMerge.exe` 실행
-            3. 또는 명령줄: `XlsxMerge.exe -b=base.xlsx -d=mine.xlsx [-s=theirs.xlsx] [-r=result.xlsx]`
-          files: ${{ env.RELEASE_ZIP }}
+            ### 주요 기능
+            - .NET 9.0 기반, ClosedXML 사용 (Excel 설치 불필요)
+            - 설치 시 Fork diff/merge 도구 자동 등록 옵션
+            - 제거 시 Fork 등록 자동 해제
+
+            ### 설치 프로그램 기능
+            - 설치 경로 선택
+            - 바탕화면 바로가기 생성 (선택)
+            - Fork diff/merge 도구 자동 등록 (선택)
+            - 프로그램 추가/제거에서 깔끔한 제거
+
+            ### 명령줄 사용법
+            ```
+            XlsxMerge.exe -b=base.xlsx -d=mine.xlsx [-s=theirs.xlsx] [-r=result.xlsx]
+            ```
+          files: |
+            ${{ env.RELEASE_ZIP }}
+            ${{ env.RELEASE_SETUP }}
           draft: false
           prerelease: false
