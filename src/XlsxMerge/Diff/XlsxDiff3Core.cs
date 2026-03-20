@@ -1,5 +1,5 @@
+using System.Collections.Concurrent;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 
@@ -27,17 +27,26 @@ namespace NexonKorea.XlsxMerge
 
         public void Run(MergeArgumentInfo mergeArgs)
         {
+            var totalSw = Stopwatch.StartNew();
             MergeArgs = mergeArgs;
 
-            // ClosedXML으로 엑셀 파일 해석 (COM Interop 대비 수십 배 빠름)
+            // Parallel file loading - each XLWorkbook instance is independent
             FakeBackgroundWorker.OnUpdateProgress("xlsx 파일 비교 [3단계 중 1단계]", "문서를 읽고 있습니다...");
-            using (var parsedXlsxGenerator = new ParsedXlsxGenerator())
+            var loadSw = Stopwatch.StartNew();
+
+            var loadTasks = new List<Task<(DocOrigin origin, ParsedXlsx parsed)>>
             {
-                ParsedWorkbookMap[DocOrigin.Base] = parsedXlsxGenerator.ParseXlsx(mergeArgs.BasePath!);
-                ParsedWorkbookMap[DocOrigin.Mine] = parsedXlsxGenerator.ParseXlsx(mergeArgs.MinePath!);
-                if (mergeArgs.ComparisonMode == ComparisonMode.ThreeWay)
-                    ParsedWorkbookMap[DocOrigin.Theirs] = parsedXlsxGenerator.ParseXlsx(mergeArgs.TheirsPath!);
-            }
+                Task.Run(() => (DocOrigin.Base, new ParsedXlsxGenerator().ParseXlsx(mergeArgs.BasePath!))),
+                Task.Run(() => (DocOrigin.Mine, new ParsedXlsxGenerator().ParseXlsx(mergeArgs.MinePath!))),
+            };
+            if (mergeArgs.ComparisonMode == ComparisonMode.ThreeWay)
+                loadTasks.Add(Task.Run(() => (DocOrigin.Theirs, new ParsedXlsxGenerator().ParseXlsx(mergeArgs.TheirsPath!))));
+
+            Task.WhenAll(loadTasks).GetAwaiter().GetResult();
+            foreach (var t in loadTasks)
+                ParsedWorkbookMap[t.Result.origin] = t.Result.parsed;
+
+            PerfLog.Log($"Total file loading (parallel): {loadSw.ElapsedMilliseconds}ms");
 
             FakeBackgroundWorker.OnUpdateProgress("xlsx 파일 비교 [3단계 중 3단계]", "엑셀 문서 비교 중..");
 
@@ -56,30 +65,44 @@ namespace NexonKorea.XlsxMerge
                     if (allSheetNameSet.Add(sheetName))
                         allSheetNameList.Add(sheetName);
 
-            // 각 워크시트를 비교
-            SheetCompareResultList.Clear();
-            foreach (var worksheetName in allSheetNameList)
+            // Parallel worksheet diff
+            var diffSw = Stopwatch.StartNew();
+            var results = new ConcurrentBag<(int index, SheetDiffResult result)>();
+            Parallel.ForEach(allSheetNameList.Select((name, idx) => (name, idx)), item =>
             {
+                var (worksheetName, idx) = item;
+                var sheetSw = Stopwatch.StartNew();
+
                 var newSheetResult = new SheetDiffResult();
-                SheetCompareResultList.Add(newSheetResult);
                 newSheetResult.WorksheetName = worksheetName;
                 newSheetResult.MergeArgs = mergeArgs;
 
                 string diff3ResultText;
                 {
+                    var linesSw = Stopwatch.StartNew();
                     var lines1 = GetWorksheetLines(xlsxList[0], worksheetName);
                     var lines2 = GetWorksheetLines(xlsxList[1], worksheetName);
                     var lines3 = GetWorksheetLines(xlsxList[2], worksheetName);
+                    PerfLog.Log($"  GetWorksheetLines '{worksheetName}': {linesSw.ElapsedMilliseconds}ms");
 
                     if (lines1 != null) newSheetResult.DocsContaining.Add(DocOrigin.Base);
                     if (lines2 != null) newSheetResult.DocsContaining.Add(DocOrigin.Mine);
                     if (lines3 != null) newSheetResult.DocsContaining.Add(DocOrigin.Theirs);
 
+                    var diff3Sw = Stopwatch.StartNew();
                     diff3ResultText = LaunchExternalDiff3Process(lines1, lines2, lines3);
+                    PerfLog.Log($"  Diff3 process '{worksheetName}': {diff3Sw.ElapsedMilliseconds}ms");
                 }
 
                 newSheetResult.HunkList = ParseDiff3Result(diff3ResultText);
-            }
+                results.Add((idx, newSheetResult));
+                PerfLog.Log($"  Sheet diff total '{worksheetName}': {sheetSw.ElapsedMilliseconds}ms");
+            });
+            SheetCompareResultList = results.OrderBy(r => r.index).Select(r => r.result).ToList();
+
+            PerfLog.Log($"Total worksheet diff (parallel): {diffSw.ElapsedMilliseconds}ms");
+            PerfLog.Log($"TOTAL Run() time: {totalSw.ElapsedMilliseconds}ms");
+            PerfLog.Flush();
         }
 
         public Dictionary<DocOrigin, ParsedXlsx.Worksheet?> GetParsedWorksheetData(string worksheetName)
@@ -106,7 +129,9 @@ namespace NexonKorea.XlsxMerge
                 var columnList = eachRow.Select(r => r.ContentsForDiff3).ToList();
                 while (columnList.Count > 0 && columnList[^1] == "")
                     columnList.RemoveAt(columnList.Count - 1);
-                result.Add(JsonSerializer.Serialize(columnList));
+                // Use SOH delimiter instead of JSON serialization - much faster,
+                // still produces unique strings per row since SOH is not in Excel data
+                result.Add(string.Join("\u0001", columnList));
             }
             return result;
         }

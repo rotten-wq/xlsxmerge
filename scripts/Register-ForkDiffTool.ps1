@@ -115,18 +115,18 @@ else {
     $diffArgs  = '-b="$LOCAL" -d="$REMOTE"'
     $mergeArgs = '-b="$BASE" -d="$LOCAL" -s="$REMOTE" -r="$MERGED"'
 
-    # Build list entries as plain PSCustomObject literals (pipe+Add-Member drops ApplicationPath)
+    # List entries use "Path" (Fork strips ApplicationPath/AppPath/ExePath on load)
     $diffEntry = [PSCustomObject]@{
-        Type            = "Custom"
-        Name            = "XlsxMerge"
-        ApplicationPath = $ExePath
-        Arguments       = $diffArgs
+        Type      = "Custom"
+        Name      = "XlsxMerge"
+        Path      = $ExePath
+        Arguments = $diffArgs
     }
     $mergeEntry = [PSCustomObject]@{
-        Type            = "Custom"
-        Name            = "XlsxMerge"
-        ApplicationPath = $ExePath
-        Arguments       = $mergeArgs
+        Type      = "Custom"
+        Name      = "XlsxMerge"
+        Path      = $ExePath
+        Arguments = $mergeArgs
     }
 
     # Update library lists

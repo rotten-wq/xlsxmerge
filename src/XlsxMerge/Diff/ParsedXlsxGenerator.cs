@@ -1,4 +1,5 @@
 using ClosedXML.Excel;
+using System.Diagnostics;
 
 namespace NexonKorea.XlsxMerge
 {
@@ -10,10 +11,14 @@ namespace NexonKorea.XlsxMerge
 
             FakeBackgroundWorker.OnUpdateProgress("xlsx 파일 비교 [3단계 중 2단계]", "문서를 읽고 있습니다.", Path.GetFileName(xlsxFilePath), xlsxFilePath);
 
+            var sw = Stopwatch.StartNew();
             using var workbook = new XLWorkbook(xlsxFilePath);
+            var loadTime = sw.ElapsedMilliseconds;
+            PerfLog.Log($"  XLWorkbook load '{Path.GetFileName(xlsxFilePath)}': {loadTime}ms");
 
             foreach (var worksheet in workbook.Worksheets)
             {
+                var sheetSw = Stopwatch.StartNew();
                 var parsedWorksheet = new ParsedXlsx.Worksheet();
                 result.Worksheets.Add(parsedWorksheet);
                 parsedWorksheet.Name = worksheet.Name;
@@ -26,10 +31,15 @@ namespace NexonKorea.XlsxMerge
                 {
                     // Column widths
                     for (int c = 1; c <= lastColNumber; c++)
-                        parsedWorksheet.ColumnWidthList.Add(worksheet.Column(c).Width * 7.5); // approximate pixel conversion
+                        parsedWorksheet.ColumnWidthList.Add(worksheet.Column(c).Width * 7.5);
 
-                    // Cell data - read all at once for performance
-                    var rangeUsed = worksheet.Range(1, 1, lastRowNumber, lastColNumber);
+                    // Build sparse cell map using CellsUsed() - much faster than rangeUsed.Cell(i,j)
+                    var cellMap = new Dictionary<(int row, int col), (string value, string formula)>();
+                    foreach (var cell in worksheet.CellsUsed())
+                    {
+                        cellMap[(cell.Address.RowNumber, cell.Address.ColumnNumber)] =
+                            (cell.CachedValue.ToString(), cell.HasFormula ? "=" + cell.FormulaR1C1 : "");
+                    }
 
                     for (int i = 1; i <= lastRowNumber; i++)
                     {
@@ -37,13 +47,15 @@ namespace NexonKorea.XlsxMerge
                         parsedWorksheet.Cells.Add(currentRow);
                         for (int j = 1; j <= lastColNumber; j++)
                         {
-                            var cell = rangeUsed.Cell(i, j);
-                            string value2 = cell.CachedValue.ToString();
-                            string formula = cell.HasFormula ? "=" + cell.FormulaR1C1 : "";
-                            currentRow.Add(new ParsedXlsx.CellContents(value2, formula));
+                            if (cellMap.TryGetValue((i, j), out var cv))
+                                currentRow.Add(new ParsedXlsx.CellContents(cv.value, cv.formula));
+                            else
+                                currentRow.Add(new ParsedXlsx.CellContents());
                         }
                     }
                 }
+
+                PerfLog.Log($"  ParseWorksheet '{worksheet.Name}' ({lastRowNumber}x{lastColNumber}): {sheetSw.ElapsedMilliseconds}ms");
             }
 
             return result;
