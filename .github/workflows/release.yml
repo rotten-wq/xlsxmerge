@@ -26,26 +26,24 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      # diff3.exe 다운로드 (GnuWin32 DiffUtils from SourceForge)
-      - name: Download diff3 (GNU DiffUtils)
+      # diff3.exe는 Git for Windows에 포함 (windows-latest에 Git 사전 설치됨)
+      - name: Locate diff3 from Git installation
         shell: pwsh
         run: |
-          # GnuWin32 diffutils (stable, well-known source)
-          $binUrl = "https://sourceforge.net/projects/gnuwin32/files/diffutils/2.8.7-1/diffutils-2.8.7-1-bin.zip/download"
-          $depUrl = "https://sourceforge.net/projects/gnuwin32/files/diffutils/2.8.7-1/diffutils-2.8.7-1-dep.zip/download"
-          $extractPath = "$env:TEMP\gnudiff"
-
-          # bin zip 다운로드
-          Invoke-WebRequest -Uri $binUrl -OutFile "$env:TEMP\diffutils-bin.zip" -UserAgent "Mozilla/5.0" -MaximumRedirection 10
-          Expand-Archive -Path "$env:TEMP\diffutils-bin.zip" -DestinationPath $extractPath -Force
-
-          # dependency zip 다운로드 (libiconv, libintl 등)
-          Invoke-WebRequest -Uri $depUrl -OutFile "$env:TEMP\diffutils-dep.zip" -UserAgent "Mozilla/5.0" -MaximumRedirection 10
-          Expand-Archive -Path "$env:TEMP\diffutils-dep.zip" -DestinationPath $extractPath -Force
-
-          # diff3.exe 위치 확인
-          $diffDir = Join-Path $extractPath "bin"
-          Get-ChildItem $diffDir -Filter "*.exe" | ForEach-Object { Write-Host "Found: $($_.Name)" }
+          # Git for Windows에 내장된 diff3.exe 사용
+          $gitDir = (Get-Command git).Source | Split-Path | Split-Path
+          $candidates = @(
+            "$gitDir\usr\bin",
+            "$gitDir\mingw64\bin",
+            "C:\Program Files\Git\usr\bin"
+          )
+          $diffDir = $candidates | Where-Object { Test-Path "$_\diff3.exe" } | Select-Object -First 1
+          if (-not $diffDir) {
+            Write-Error "diff3.exe not found in Git installation"
+            exit 1
+          }
+          Write-Host "Found diff3.exe in: $diffDir"
+          Get-ChildItem "$diffDir\diff*.exe" | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "DIFF_TOOLS_DIR=$diffDir" >> $env:GITHUB_ENV
 
       # Self-contained 빌드 (런타임 포함, 단일 폴더)
