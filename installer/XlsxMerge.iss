@@ -62,7 +62,7 @@ Name: "{autodesktop}\{#APP_NAME}";     Filename: "{app}\{#APP_EXE}"; Tasks: desk
 [Run]
 ; 설치 후 Fork 등록 (사용자가 체크한 경우)
 Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Register-ForkDiffTool.ps1"" -ExePath ""{app}\{#APP_EXE}"""; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Register-ForkDiffTool.ps1"" -ExePath ""{app}\{#APP_EXE}"" -Silent"; \
   StatusMsg: "Registering XlsxMerge in Fork..."; \
   Tasks: forkregister; \
   Flags: runhidden waituntilterminated
@@ -75,7 +75,7 @@ Filename: "{app}\{#APP_EXE}"; \
 [UninstallRun]
 ; 제거 시 Fork 등록 해제
 Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Register-ForkDiffTool.ps1"" -Uninstall"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Register-ForkDiffTool.ps1"" -Uninstall -Silent"; \
   RunOnceId: "ForkUnregister"; \
   Flags: runhidden waituntilterminated
 

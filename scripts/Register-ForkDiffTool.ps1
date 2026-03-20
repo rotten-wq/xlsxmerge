@@ -26,7 +26,8 @@
 
 param(
     [string]$ExePath,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$Silent   # 인스톨러 등 비대화형 환경에서 사용: Fork 자동 종료, 프롬프트 없음
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,15 +58,23 @@ $exePathEscaped = $ExePath.Replace('\', '\\')
 # ── Fork 실행 여부 확인 ──
 $forkProcess = Get-Process -Name "Fork" -ErrorAction SilentlyContinue
 if ($forkProcess) {
-    Write-Host "[WARNING] Fork가 실행 중입니다. 설정이 덮어씌워질 수 있습니다." -ForegroundColor Yellow
-    $answer = Read-Host "Fork를 종료하고 계속할까요? (Y/N)"
-    if ($answer -eq 'Y' -or $answer -eq 'y') {
+    if ($Silent) {
+        # 비대화형 모드: Fork 자동 종료 (인스톨러 등)
+        Write-Host "[INFO] Fork가 실행 중입니다. 자동으로 종료합니다." -ForegroundColor Yellow
         $forkProcess | Stop-Process -Force
         Start-Sleep -Seconds 2
-        Write-Host "  Fork를 종료했습니다." -ForegroundColor Green
+        Write-Host "[INFO] Fork를 종료했습니다." -ForegroundColor Green
     } else {
-        Write-Host "  스크립트를 중단합니다. Fork를 종료한 후 다시 실행해주세요." -ForegroundColor Yellow
-        exit 0
+        Write-Host "[WARNING] Fork가 실행 중입니다. 설정이 덮어씌워질 수 있습니다." -ForegroundColor Yellow
+        $answer = Read-Host "Fork를 종료하고 계속할까요? (Y/N)"
+        if ($answer -eq 'Y' -or $answer -eq 'y') {
+            $forkProcess | Stop-Process -Force
+            Start-Sleep -Seconds 2
+            Write-Host "  Fork를 종료했습니다." -ForegroundColor Green
+        } else {
+            Write-Host "  스크립트를 중단합니다. Fork를 종료한 후 다시 실행해주세요." -ForegroundColor Yellow
+            exit 0
+        }
     }
 }
 
