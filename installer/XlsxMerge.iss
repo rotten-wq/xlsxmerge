@@ -46,7 +46,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon";   Description: "Create a &desktop shortcut";       GroupDescription: "Additional shortcuts:"
-Name: "forkregister";  Description: "Register as Fork diff/merge tool"; GroupDescription: "Git Integration:"; Flags: checkedonce
+Name: "forkregister";  Description: "Register as Fork diff/merge tool"; GroupDescription: "Git Integration:"
 
 [Files]
 ; 빌드 출력 전체 복사 (exe, dll, diff3.exe 등)
@@ -79,21 +79,3 @@ Filename: "powershell.exe"; \
   RunOnceId: "ForkUnregister"; \
   Flags: runhidden waituntilterminated
 
-[Code]
-// ── 설치 시 Fork 경로 자동 감지해서 안내 표시 ──
-function IsForkInstalled(): Boolean;
-var
-  ForkSettingsPath: String;
-begin
-  ForkSettingsPath := ExpandConstant('{localappdata}\Fork\settings.json');
-  Result := FileExists(ForkSettingsPath);
-end;
-
-procedure InitializeWizard();
-begin
-  if not IsForkInstalled() then
-  begin
-    // Fork가 설치 안 된 경우 체크박스 기본 해제
-    WizardForm.TasksList.Checked[1] := False;
-  end;
-end;
