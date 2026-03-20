@@ -112,7 +112,7 @@ if ($Uninstall) {
     Write-Host "Restart Fork to apply changes." -ForegroundColor Cyan
 }
 else {
-    $diffArgs  = '-b="$LOCAL" -d="$REMOTE"'
+    $diffArgs  = '-b="$REMOTE" -d="$LOCAL"'
     $mergeArgs = '-b="$BASE" -d="$LOCAL" -s="$REMOTE" -r="$MERGED"'
 
     # List entries use "Path" (Fork strips ApplicationPath/AppPath/ExePath on load)
